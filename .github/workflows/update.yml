@@ -30,6 +30,9 @@ jobs:
 
       - name: 대시보드 만들기
         run: python macro_dashboard.py --no-browser
+        env:
+          # FRED 무료 API 키 (Settings → Secrets and variables → Actions 에 저장, 공개 안 됨)
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
 
       - name: data/ 변경분 커밋·푸시
         run: |

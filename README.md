@@ -22,6 +22,7 @@
 - **바로 업데이트하고 싶을 때**: Actions 탭 → "매일 거시경제 업데이트" → `Run workflow`
 - **내 컴퓨터에서 실행**: `python macro_dashboard.py` (브라우저가 열림)
 - **서버용 실행**: `python macro_dashboard.py --no-browser`
+- **FRED API 키**: GitHub Actions 서버에서는 FRED 키 없이 접속하면 응답이 없어서, 무료 API 키를 저장소 Secret `FRED_API_KEY` 로 넣어 둡니다.
 
 ## 주의
 

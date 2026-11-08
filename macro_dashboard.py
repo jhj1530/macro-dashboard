@@ -28,6 +28,7 @@ import datetime as dt
 import html
 import io
 import json
+import os
 import shutil
 import sys
 import webbrowser
@@ -67,21 +68,36 @@ def parse_date(text):
 
 
 def fetch_fred(series_id, start):
-    """FRED 지표 → [(날짜, 값), ...] (날짜 오름차순)"""
-    text = http_get(
-        "https://fred.stlouisfed.org/graph/fredgraph.csv"
-        f"?id={series_id}&cosd={start.isoformat()}"
-    )
+    """FRED 지표 → [(날짜, 값), ...] (날짜 오름차순)
+
+    FRED_API_KEY(무료 공식 API 키)가 있으면 공식 API로, 없으면 그래프용 CSV로 받음.
+    GitHub Actions 서버에서는 CSV 주소가 응답하지 않는 경우가 있어 API 키 사용을 권장.
+    """
+    key = os.environ.get("FRED_API_KEY", "").strip()
+    if key:
+        j = json.loads(http_get(
+            "https://api.stlouisfed.org/fred/series/observations"
+            f"?series_id={series_id}&observation_start={start.isoformat()}&api_key={key}&file_type=json"
+        ))
+        pairs = [(o["date"], o["value"]) for o in j.get("observations", [])]
+    else:
+        text = http_get(
+            "https://fred.stlouisfed.org/graph/fredgraph.csv"
+            f"?id={series_id}&cosd={start.isoformat()}"
+        )
+        reader = csv.reader(io.StringIO(text))
+        next(reader, None)
+        pairs = [(rec[0], rec[1]) for rec in reader if len(rec) >= 2]
     rows = []
-    reader = csv.reader(io.StringIO(text))
-    next(reader, None)
-    for rec in reader:
-        if len(rec) < 2 or rec[1].strip() in ("", "."):
+    for d, v in pairs:
+        if v.strip() in ("", "."):
             continue
         try:
-            rows.append((parse_date(rec[0]), float(rec[1])))
+            rows.append((parse_date(d), float(v)))
         except ValueError:
             continue
+    if not rows:
+        raise ValueError("데이터 비어 있음")
     rows.sort()
     return rows
 
@@ -858,7 +874,8 @@ SECONDARY = {
 def collect(today):
     start = years_ago(today, CHART_YEARS + 4)
     fred, sec, errs = {}, {}, {}
-    print("1) FRED 데이터 받는 중")
+    via = "공식 API(키 사용)" if os.environ.get("FRED_API_KEY", "").strip() else "CSV(키 없음)"
+    print(f"1) FRED 데이터 받는 중 - {via}")
     for sid in FRED_IDS:
         try:
             fred[sid] = fetch_fred(sid, start)

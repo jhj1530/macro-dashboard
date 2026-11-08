@@ -28,6 +28,7 @@ import datetime as dt
 import html
 import io
 import json
+import shutil
 import sys
 import webbrowser
 from pathlib import Path
@@ -39,6 +40,7 @@ DATA_DIR = HERE / "data"
 OUT_HTML = SITE_DIR / "index.html"
 LOG_CSV = DATA_DIR / "macro_log.csv"
 STATE_JSON = DATA_DIR / "last_verified.json"
+ASSETS_DIR = HERE / "assets"  # 홈 화면 아이콘 (tools/make_icons.py로 만듦)
 CHART_YEARS = 3
 SAMPLE_MODE = False  # True면 화면 위에 "샘플 데이터" 경고를 띄움 (테스트용)
 
@@ -683,6 +685,9 @@ def build_html(cards, log_rows, generated):
 <meta name="theme-color" content="#f6f5f2">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="거시체크">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" type="image/png" href="favicon.png">
+<link rel="manifest" href="manifest.webmanifest">
 <title>거시경제 체크</title>
 <style>
 :root {{
@@ -900,6 +905,22 @@ def build_cards(fred, sec, today, state):
     return cards
 
 
+MANIFEST = {
+    "name": "거시경제 체크", "short_name": "거시체크", "start_url": ".", "display": "standalone",
+    "background_color": "#1f3a5f", "theme_color": "#f6f5f2",
+    "icons": [{"src": "icon-192.png", "sizes": "192x192", "type": "image/png"},
+              {"src": "icon-512.png", "sizes": "512x512", "type": "image/png"}],
+}
+
+
+def write_icons():
+    """아이콘과 앱 정보(manifest)를 site/에 넣음 → 홈 화면 추가 시 이 아이콘이 보임"""
+    if ASSETS_DIR.is_dir():
+        for png in ASSETS_DIR.glob("*.png"):
+            shutil.copy2(png, SITE_DIR / png.name)
+    (SITE_DIR / "manifest.webmanifest").write_text(json.dumps(MANIFEST, ensure_ascii=False), encoding="utf-8")
+
+
 def main(open_browser=True, today=None):
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -914,6 +935,7 @@ def main(open_browser=True, today=None):
     SITE_DIR.mkdir(exist_ok=True)
     generated = dt.datetime.now(KST).strftime("%Y.%m.%d %H:%M (한국시간)")
     OUT_HTML.write_text(build_html(cards, log_rows, generated), encoding="utf-8")
+    write_icons()
 
     print("\n3) 결과")
     for c in cards:

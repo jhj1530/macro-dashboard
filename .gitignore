@@ -1,0 +1,20 @@
+# 파이썬 임시 파일
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# site/ 는 GitHub Actions가 매번 새로 만들어 Pages로 바로 배포하므로 저장소에 넣지 않음
+site/
+
+# 운영체제·편집기 잡파일
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+
+# 비밀 정보·개인 자산 정보는 절대 올리지 않기 (공개 저장소)
+.env
+*.key
+private/

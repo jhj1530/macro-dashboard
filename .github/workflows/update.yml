@@ -2,8 +2,10 @@ name: 매일 거시경제 업데이트
 
 on:
   schedule:
-    # 평일 한국시간 07:30 (= UTC 전날 22:30, 일~목)
-    - cron: "30 22 * * 0-4"
+    # 목표: 평일 한국시간 07:30까지 업데이트 완료.
+    # GitHub 예약 실행은 몇 시간씩 늦어질 수 있어서 일찍, 두 번 돌림 (UTC 기준, 일~목 = 한국 월~금)
+    - cron: "17 17 * * 0-4" # 한국시간 02:17
+    - cron: "47 20 * * 0-4" # 한국시간 05:47
   workflow_dispatch: # Actions 탭의 "Run workflow" 버튼으로 수동 실행
 
 permissions:
@@ -19,6 +21,8 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    outputs:
+      fresh: ${{ steps.dash.outputs.fresh }}
     steps:
       - name: 저장소 내려받기
         uses: actions/checkout@v7
@@ -29,7 +33,11 @@ jobs:
           python-version: "3.12"
 
       - name: 대시보드 만들기
+        id: dash
         run: python macro_dashboard.py --no-browser
+        env:
+          # FRED 무료 API 키 (Settings → Secrets and variables → Actions 에 저장, 공개 안 됨)
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
 
       - name: data/ 변경분 커밋·푸시
         run: |
@@ -62,3 +70,10 @@ jobs:
       - name: GitHub Pages로 배포
         id: deployment
         uses: actions/deploy-pages@v5
+
+      # 페이지는 올리되, 새 데이터를 하나도 못 받은 날은 실행 목록에 X로 표시
+      - name: 새 데이터 확인
+        if: needs.build.outputs.fresh == '0'
+        run: |
+          echo "::error::새로 받은 지표가 하나도 없습니다 (build의 '대시보드 만들기' 기록 확인)"
+          exit 1

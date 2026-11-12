@@ -28,6 +28,8 @@ import datetime as dt
 import html
 import io
 import json
+import os
+import shutil
 import sys
 import webbrowser
 from pathlib import Path
@@ -39,6 +41,7 @@ DATA_DIR = HERE / "data"
 OUT_HTML = SITE_DIR / "index.html"
 LOG_CSV = DATA_DIR / "macro_log.csv"
 STATE_JSON = DATA_DIR / "last_verified.json"
+ASSETS_DIR = HERE / "assets"  # 홈 화면 아이콘 (tools/make_icons.py로 만듦)
 CHART_YEARS = 3
 SAMPLE_MODE = False  # True면 화면 위에 "샘플 데이터" 경고를 띄움 (테스트용)
 
@@ -65,21 +68,36 @@ def parse_date(text):
 
 
 def fetch_fred(series_id, start):
-    """FRED 지표 → [(날짜, 값), ...] (날짜 오름차순)"""
-    text = http_get(
-        "https://fred.stlouisfed.org/graph/fredgraph.csv"
-        f"?id={series_id}&cosd={start.isoformat()}"
-    )
+    """FRED 지표 → [(날짜, 값), ...] (날짜 오름차순)
+
+    FRED_API_KEY(무료 공식 API 키)가 있으면 공식 API로, 없으면 그래프용 CSV로 받음.
+    GitHub Actions 서버에서는 CSV 주소가 응답하지 않는 경우가 있어 API 키 사용을 권장.
+    """
+    key = os.environ.get("FRED_API_KEY", "").strip()
+    if key:
+        j = json.loads(http_get(
+            "https://api.stlouisfed.org/fred/series/observations"
+            f"?series_id={series_id}&observation_start={start.isoformat()}&api_key={key}&file_type=json"
+        ))
+        pairs = [(o["date"], o["value"]) for o in j.get("observations", [])]
+    else:
+        text = http_get(
+            "https://fred.stlouisfed.org/graph/fredgraph.csv"
+            f"?id={series_id}&cosd={start.isoformat()}"
+        )
+        reader = csv.reader(io.StringIO(text))
+        next(reader, None)
+        pairs = [(rec[0], rec[1]) for rec in reader if len(rec) >= 2]
     rows = []
-    reader = csv.reader(io.StringIO(text))
-    next(reader, None)
-    for rec in reader:
-        if len(rec) < 2 or rec[1].strip() in ("", "."):
+    for d, v in pairs:
+        if v.strip() in ("", "."):
             continue
         try:
-            rows.append((parse_date(rec[0]), float(rec[1])))
+            rows.append((parse_date(d), float(v)))
         except ValueError:
             continue
+    if not rows:
+        raise ValueError("데이터 비어 있음")
     rows.sort()
     return rows
 
@@ -683,6 +701,9 @@ def build_html(cards, log_rows, generated):
 <meta name="theme-color" content="#f6f5f2">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="거시체크">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" type="image/png" href="favicon.png">
+<link rel="manifest" href="manifest.webmanifest">
 <title>거시경제 체크</title>
 <style>
 :root {{
@@ -853,7 +874,8 @@ SECONDARY = {
 def collect(today):
     start = years_ago(today, CHART_YEARS + 4)
     fred, sec, errs = {}, {}, {}
-    print("1) FRED 데이터 받는 중")
+    via = "공식 API(키 사용)" if os.environ.get("FRED_API_KEY", "").strip() else "CSV(키 없음)"
+    print(f"1) FRED 데이터 받는 중 - {via}")
     for sid in FRED_IDS:
         try:
             fred[sid] = fetch_fred(sid, start)
@@ -900,6 +922,22 @@ def build_cards(fred, sec, today, state):
     return cards
 
 
+MANIFEST = {
+    "name": "거시경제 체크", "short_name": "거시체크", "start_url": ".", "display": "standalone",
+    "background_color": "#1f3a5f", "theme_color": "#f6f5f2",
+    "icons": [{"src": "icon-192.png", "sizes": "192x192", "type": "image/png"},
+              {"src": "icon-512.png", "sizes": "512x512", "type": "image/png"}],
+}
+
+
+def write_icons():
+    """아이콘과 앱 정보(manifest)를 site/에 넣음 → 홈 화면 추가 시 이 아이콘이 보임"""
+    if ASSETS_DIR.is_dir():
+        for png in ASSETS_DIR.glob("*.png"):
+            shutil.copy2(png, SITE_DIR / png.name)
+    (SITE_DIR / "manifest.webmanifest").write_text(json.dumps(MANIFEST, ensure_ascii=False), encoding="utf-8")
+
+
 def main(open_browser=True, today=None):
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -914,6 +952,7 @@ def main(open_browser=True, today=None):
     SITE_DIR.mkdir(exist_ok=True)
     generated = dt.datetime.now(KST).strftime("%Y.%m.%d %H:%M (한국시간)")
     OUT_HTML.write_text(build_html(cards, log_rows, generated), encoding="utf-8")
+    write_icons()
 
     print("\n3) 결과")
     for c in cards:
@@ -924,6 +963,11 @@ def main(open_browser=True, today=None):
             flag = "통과" if k["ok"] else ("확인불가" if k["ok"] is None else "실패")
             print(f"           - {k['name']} {flag}: {k['detail']}")
     print(f"\n대시보드: {OUT_HTML}\n기록: {LOG_CSV}")
+    fresh = sum(1 for c in cards if c["verify"] in ("verified", "single"))
+    out = os.environ.get("GITHUB_OUTPUT")  # GitHub Actions에 "새로 받은 지표 수"를 알려줌
+    if out:
+        with open(out, "a", encoding="utf-8") as fh:
+            fh.write(f"fresh={fresh}\n")
     if open_browser:
         webbrowser.open(OUT_HTML.as_uri())
 

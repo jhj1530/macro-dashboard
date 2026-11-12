@@ -1,6 +1,6 @@
 # 거시경제 체크 대시보드
 
-매일 아침(평일 한국시간 07:30) 미국 거시경제 지표 6개를 자동으로 받아,
+평일 아침(한국시간 07:30 전까지) 미국 거시경제 지표 6개를 자동으로 받아,
 **검증을 통과한 숫자만** 휴대폰용 웹페이지로 보여줍니다.
 
 - 페이지 주소: `https://jhj1530.github.io/macro-dashboard/`
@@ -22,6 +22,7 @@
 - **바로 업데이트하고 싶을 때**: Actions 탭 → "매일 거시경제 업데이트" → `Run workflow`
 - **내 컴퓨터에서 실행**: `python macro_dashboard.py` (브라우저가 열림)
 - **서버용 실행**: `python macro_dashboard.py --no-browser`
+- **FRED API 키**: GitHub Actions 서버에서는 FRED 키 없이 접속하면 응답이 없어서, 무료 API 키를 저장소 Secret `FRED_API_KEY` 로 넣어 둡니다.
 
 ## 주의
 

@@ -963,6 +963,11 @@ def main(open_browser=True, today=None):
             flag = "통과" if k["ok"] else ("확인불가" if k["ok"] is None else "실패")
             print(f"           - {k['name']} {flag}: {k['detail']}")
     print(f"\n대시보드: {OUT_HTML}\n기록: {LOG_CSV}")
+    fresh = sum(1 for c in cards if c["verify"] in ("verified", "single"))
+    out = os.environ.get("GITHUB_OUTPUT")  # GitHub Actions에 "새로 받은 지표 수"를 알려줌
+    if out:
+        with open(out, "a", encoding="utf-8") as fh:
+            fh.write(f"fresh={fresh}\n")
     if open_browser:
         webbrowser.open(OUT_HTML.as_uri())
 

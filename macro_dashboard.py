@@ -3,7 +3,7 @@
 거시경제 체크 대시보드 (macro_dashboard.py)  v2
 
 하는 일
-  1. 미국 연준 데이터(FRED)에서 거시지표 6개를 내려받습니다. (API 키 필요 없음)
+  1. 미국 연준 데이터(FRED)에서 거시지표와 주가지수를 내려받습니다.
   2. 지표마다 "검증"을 거칩니다.
        - 최신성: 데이터가 너무 오래되지 않았는지
        - 범위:   말이 안 되는 숫자(예: 환율 5,000원)가 아닌지
@@ -160,6 +160,44 @@ def fetch_ecb_fx(today):
     if not rows:
         raise ValueError("환율 데이터 비어 있음")
     return rows
+
+
+def fetch_index_close(stooq_sym, yahoo_sym):
+    """주가지수 종가(교차검증용) → {날짜: 종가}. Stooq → Yahoo 순서로 시도.
+
+    둘 다 거래소 공식 발표처는 아니고, FRED와 독립된 시세 제공처예요.
+    """
+    errs = []
+    try:
+        text = http_get(f"https://stooq.com/q/d/l/?s={stooq_sym}&i=d")
+        reader = csv.reader(io.StringIO(text))
+        header = [h.strip().lower() for h in next(reader)]
+        i_d, i_c = header.index("date"), header.index("close")
+        out = {}
+        for rec in reader:
+            try:
+                out[parse_date(rec[i_d])] = float(rec[i_c])
+            except (ValueError, IndexError):
+                continue
+        if out:
+            return out
+        errs.append("Stooq: 데이터 비어 있음")
+    except Exception as exc:
+        errs.append(f"Stooq: {type(exc).__name__}: {str(exc)[:60]}")
+    try:
+        j = json.loads(http_get(
+            f"https://query1.finance.yahoo.com/v8/finance/chart/{yahoo_sym}?range=1mo&interval=1d"))
+        r = j["chart"]["result"][0]
+        out = {}
+        for ts, c in zip(r["timestamp"], r["indicators"]["quote"][0]["close"]):
+            if c is not None:
+                out[dt.datetime.fromtimestamp(ts, dt.timezone.utc).date()] = float(c)
+        if out:
+            return out
+        errs.append("Yahoo: 데이터 비어 있음")
+    except Exception as exc:
+        errs.append(f"Yahoo: {type(exc).__name__}: {str(exc)[:60]}")
+    raise ValueError(" / ".join(errs))
 
 
 # ===========================================================================
@@ -542,6 +580,54 @@ def card_fx(f, s, today):
     )
 
 
+def _index_card(f, s, today, cid, title, fred_id, sec_key, lo, hi, explain):
+    rows = f.get(fred_id) or []
+    if not rows:
+        raise MissingData(fred_id)
+    d, v = rows[-1]
+    checks = [check_fresh(d, today, 10), check_range(v, lo, hi, "pt"), check_jumps(rows, v * 0.07, "pt")]
+    other = s.get(sec_key)
+    if other is not None:
+        checks.append(check_cross("교차검증(다른 시세 제공처)", v, other.get(d), 0.2, rel=True))
+    else:
+        checks.append(chk("교차검증(다른 시세 제공처)", None, s.get("_err", {}).get(sec_key, "받지 못함")))
+    peak_d, peak = max(rows, key=lambda x: x[1])[0], max(x for _, x in rows)
+    dd = round((v / peak - 1) * 100, 1)  # 고점 대비 하락폭(%), 0 또는 마이너스
+    zones = [(-20, "warn"), (-10, "watch"), (99, "good")]
+    status = zone_of(dd, zones)
+    where = "지금이 최고점이에요." if dd == 0 else f"최고점({peak_d.strftime('%Y.%m.%d')})보다 {abs(dd):.1f}% 낮아요."
+    meaning = where + " " + {
+        "good": "고점 근처예요.",
+        "watch": "10% 넘게 내린 '조정' 구간이에요.",
+        "warn": "20% 넘게 내린 '약세장' 구간이에요.",
+    }[status]
+    prev = value_on_or_before(rows, d - dt.timedelta(days=30))
+    mo = None if prev is None else round((v / prev[1] - 1) * 100, 2)
+    return dict(
+        id=cid, title=title, value=v, value_text=f"{v:,.0f}", unit="pt",
+        date=d.isoformat(), delta=mo, delta_unit="%",
+        sub=f"고점 대비 {dd:+.1f}%" if dd else "고점 대비 0%",
+        status=status, meaning=meaning, explain=explain,
+        source=f"FRED {fred_id}", checks=checks,
+        gauge=gauge(-30, 0, zones, dd),
+        chart={"series": [{"name": title, "pts": chart_series(rows, d)}], "unit": "pt"},
+    )
+
+
+def card_sp500(f, s, today):
+    return _index_card(
+        f, s, today, "sp500", "S&P 500", "SP500", "idx_sp500", 500, 50000,
+        "미국 대표 대기업 500개의 주가를 묶은 지수. 막대는 최근 7년 안의 최고점에서 몇 % 내려와 있는지를 보여줘요. "
+        "보통 10% 넘게 내리면 '조정', 20% 넘게 내리면 '약세장'이라고 불러요. 오를지 내릴지를 알려주는 지표는 아니에요.")
+
+
+def card_ndx(f, s, today):
+    return _index_card(
+        f, s, today, "ndx", "나스닥 100", "NASDAQ100", "idx_ndx", 1000, 200000,
+        "나스닥에 상장된 대형 기술주 중심 100개 기업의 지수. 금리에 더 민감해서 S&P 500보다 크게 움직이는 편이에요. "
+        "막대는 최근 7년 안의 최고점에서 몇 % 내려와 있는지를 보여줘요.")
+
+
 CARDS = [  # (함수, 카드 제목) — 제목은 기록 파일의 열 이름이라 바꾸지 않는 게 좋아요
     (card_us10y, "미국 10년물 국채 금리"),
     (card_spread, "장단기 금리차 (10년−2년)"),
@@ -549,6 +635,8 @@ CARDS = [  # (함수, 카드 제목) — 제목은 기록 파일의 열 이름�
     (card_sahm, "고용 경고등 (삼의 법칙)"),
     (card_cpi, "미국 물가상승률"),
     (card_fx, "원/달러 환율"),
+    (card_sp500, "S&P 500"),
+    (card_ndx, "나스닥 100"),
 ]
 
 
@@ -675,7 +763,7 @@ def build_html(cards, log_rows, generated):
         headline = "눈에 띄는 위험 신호는 없어요"
     nv = sum(1 for c in cards if c["verify"] == "verified")
     held = [c["title"] for c in cards if c["verify"] in ("held", "error")]
-    verify_line = f"6개 중 {nv}개 원출처와 교차검증 완료"
+    verify_line = f"{len(cards)}개 중 {nv}개 교차검증 완료"
     if held:
         verify_line += f" · 업데이트 보류: {', '.join(held)}"
 
@@ -861,13 +949,16 @@ document.querySelectorAll("details").forEach(d => d.addEventListener("toggle", (
 # ===========================================================================
 # 7. 실행
 # ===========================================================================
-FRED_IDS = ["DGS10", "DGS2", "T10Y2Y", "DFEDTARU", "UNRATE", "SAHMREALTIME", "CPIAUCSL", "DEXKOUS"]
+FRED_IDS = ["DGS10", "DGS2", "T10Y2Y", "DFEDTARU", "UNRATE", "SAHMREALTIME", "CPIAUCSL", "DEXKOUS",
+            "SP500", "NASDAQ100"]
 SECONDARY = {
     "treasury": lambda today: fetch_treasury(today),
     "nyfed": lambda today: fetch_nyfed(),
     "bls_un": lambda today: fetch_bls("LNS14000000"),
     "bls_cpi": lambda today: fetch_bls("CUSR0000SA0"),
     "ecb_fx": lambda today: fetch_ecb_fx(today),
+    "idx_sp500": lambda today: fetch_index_close("^spx", "%5EGSPC"),
+    "idx_ndx": lambda today: fetch_index_close("^ndx", "%5ENDX"),
 }
 
 
